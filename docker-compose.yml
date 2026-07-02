@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: bosco-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bosco
+      POSTGRES_PASSWORD: bosco
+      POSTGRES_DB: bosco
+    ports:
+      # Host 5439 → container 5432, to avoid clashing with a native Postgres on 5432
+      - '5439:5432'
+    volumes:
+      - bosco-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bosco -d bosco']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  bosco-pgdata:
