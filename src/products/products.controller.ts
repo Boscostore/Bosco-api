@@ -26,6 +26,10 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 
+// Only .png / .jpg / .jpeg (both map to image/jpeg). Keeps SVG out — a
+// public bucket serving user-supplied SVGs is an XSS vector.
+const ALLOWED_IMAGE_TYPES = /^image\/(png|jpeg)$/;
+
 const imageInterceptor = FileInterceptor('image', {
   storage: memoryStorage(),
   limits: { fileSize: MAX_IMAGE_BYTES },
@@ -34,14 +38,14 @@ const imageInterceptor = FileInterceptor('image', {
 const requiredImagePipe = new ParseFilePipe({
   validators: [
     new MaxFileSizeValidator({ maxSize: MAX_IMAGE_BYTES }),
-    new FileTypeValidator({ fileType: /^image\// }),
+    new FileTypeValidator({ fileType: ALLOWED_IMAGE_TYPES }),
   ],
 });
 
 const optionalImagePipe = new ParseFilePipe({
   validators: [
     new MaxFileSizeValidator({ maxSize: MAX_IMAGE_BYTES }),
-    new FileTypeValidator({ fileType: /^image\// }),
+    new FileTypeValidator({ fileType: ALLOWED_IMAGE_TYPES }),
   ],
   fileIsRequired: false,
 });
