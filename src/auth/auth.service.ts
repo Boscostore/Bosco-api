@@ -39,7 +39,11 @@ export class AuthService {
   async requestOtp(rawEmail: string): Promise<void> {
     const email = rawEmail.trim().toLowerCase();
     if (!this.isAdmin(email)) {
-      // Silently ignore non-admin emails.
+      // Silently ignore non-admin emails (the client still gets a 200).
+      // Logged for ops so "no email arrived" is diagnosable from Render logs.
+      this.logger.warn(
+        `OTP requested for non-admin email (ignored): ${email} — check ADMIN_EMAILS if this should work`,
+      );
       return;
     }
 
@@ -68,15 +72,25 @@ export class AuthService {
 
     try {
       const resend = new Resend(apiKey);
-      await resend.emails.send({
+      // Resend v4 does NOT throw on API rejections (unverified domain, bad
+      // "from", sandbox limits…) — it returns { data, error }. Check both.
+      const { data, error } = await resend.emails.send({
         from,
         to: email,
-        subject: 'Tu código de acceso a Bosco',
+        subject: 'Tu código de acceso a BoscoStore',
         text: `Tu código de acceso es ${code}. Expira en 10 minutos.`,
-        html: `<p>Tu código de acceso a <strong>Bosco</strong> es:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px">${code}</p><p>Expira en 10 minutos.</p>`,
+        html: `<p>Tu código de acceso a <strong>BoscoStore</strong> es:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px">${code}</p><p>Expira en 10 minutos.</p>`,
       });
+
+      if (error) {
+        this.logger.error(
+          `Resend rejected OTP email to ${email} (from: ${from}): ${JSON.stringify(error)}`,
+        );
+        return;
+      }
+      this.logger.log(`OTP email sent to ${email} (resend id: ${data?.id})`);
     } catch (err) {
-      // Do not leak delivery failures to the client; log for ops.
+      // Network/unexpected failures. Do not leak to the client; log for ops.
       this.logger.error(
         `Failed to send OTP email to ${email}: ${(err as Error).message}`,
       );
