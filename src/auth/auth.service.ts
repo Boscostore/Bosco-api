@@ -38,11 +38,16 @@ export class AuthService {
    */
   async requestOtp(rawEmail: string): Promise<void> {
     const email = rawEmail.trim().toLowerCase();
+    const allowlist = this.adminEmails();
+    this.logger.log(
+      `[1/3] requestOtp for ${email} — allowlist has ${allowlist.length} entr${allowlist.length === 1 ? 'y' : 'ies'}`,
+    );
+
     if (!this.isAdmin(email)) {
       // Silently ignore non-admin emails (the client still gets a 200).
       // Logged for ops so "no email arrived" is diagnosable from Render logs.
       this.logger.warn(
-        `OTP requested for non-admin email (ignored): ${email} — check ADMIN_EMAILS if this should work`,
+        `[1/3] ✗ ${email} is NOT in ADMIN_EMAILS — no code generated. Check the env value (comma-separated, no spaces issues)`,
       );
       return;
     }
@@ -51,9 +56,12 @@ export class AuthService {
     const codeHash = await bcrypt.hash(code, 10);
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-    await this.prisma.adminOtp.create({
+    const otp = await this.prisma.adminOtp.create({
       data: { email, codeHash, expiresAt },
     });
+    this.logger.log(
+      `[2/3] OTP row created (id: ${otp.id}, expires: ${expiresAt.toISOString()}) — delivering…`,
+    );
 
     await this.deliverCode(email, code);
   }
@@ -61,6 +69,9 @@ export class AuthService {
   private async deliverCode(email: string, code: string): Promise<void> {
     const apiKey = this.config.get<string>('RESEND_API_KEY');
     const from = this.config.get<string>('RESEND_FROM');
+    this.logger.log(
+      `[3/3] Resend config — apiKey: ${apiKey ? `set (${apiKey.length} chars, "${apiKey.slice(0, 5)}…")` : 'MISSING'}, from: ${from ? `"${from}"` : 'MISSING'}, to: ${email}`,
+    );
 
     if (!apiKey || !from) {
       // Dev fallback — no email provider configured.
@@ -84,11 +95,13 @@ export class AuthService {
 
       if (error) {
         this.logger.error(
-          `Resend rejected OTP email to ${email} (from: ${from}): ${JSON.stringify(error)}`,
+          `[3/3] ✗ Resend REJECTED the email (from: ${from}, to: ${email}): ${JSON.stringify(error)}`,
         );
         return;
       }
-      this.logger.log(`OTP email sent to ${email} (resend id: ${data?.id})`);
+      this.logger.log(
+        `[3/3] ✓ OTP email accepted by Resend (id: ${data?.id}) — if it doesn't arrive, check Resend dashboard → Emails, spam folder, and that the mailbox exists`,
+      );
     } catch (err) {
       // Network/unexpected failures. Do not leak to the client; log for ops.
       this.logger.error(
@@ -113,11 +126,17 @@ export class AuthService {
     });
 
     if (!otp) {
+      this.logger.warn(
+        `verifyOtp: no active (unconsumed, unexpired) code found for ${email}`,
+      );
       throw new UnauthorizedException('Código inválido o expirado');
     }
 
     const matches = await bcrypt.compare(code, otp.codeHash);
     if (!matches) {
+      this.logger.warn(
+        `verifyOtp: code mismatch for ${email} (otp row: ${otp.id})`,
+      );
       throw new UnauthorizedException('Código inválido o expirado');
     }
 
@@ -125,6 +144,7 @@ export class AuthService {
       where: { id: otp.id },
       data: { consumedAt: new Date() },
     });
+    this.logger.log(`verifyOtp: ✓ ${email} authenticated (otp: ${otp.id})`);
 
     const accessToken = await this.jwt.signAsync(
       { sub: email, email },
